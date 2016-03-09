@@ -1,0 +1,25 @@
+
+# root of Android NDK
+ROOT=/opt
+
+# your NDK version
+NDK=android-ndk-r5b
+
+PREFIX=$(ROOT)/$(NDK)/toolchains/arm-linux-androideabi-4.4.3/prebuilt/linux-x86/bin/arm-linux-androideabi-
+
+SYSROOT=--sysroot=$(ROOT)/$(NDK)/platforms/android-9/arch-arm/
+
+CC=$(PREFIX)gcc $(SYSROOT)
+LD=$(PREFIX)gcc $(SYSROOT)
+
+CFLAGS=-c -Wall -O2 -DARM -DANDROID -DTHUMB
+
+all:
+	$(CC) $(CFLAGS) inject.c
+	$(LD) inject.o -o inject
+	$(CC) $(CFLAGS) -fPIC dso-test.c
+	$(LD) -shared dso-test.o -o dso-test.so
+
+clean:
+	rm -rf *.o
+
