@@ -1,6 +1,8 @@
 CC=gcc
 LD=ld
-CFLAGS=-c -Wall -O2 -std=c11 -pedantic
+#BTI=-fcf-protection=full
+BTI=
+CFLAGS=-c -Wall -O2 -std=c11 -pedantic $(BTI)
 
 all:
 	$(CC) $(CFLAGS) inject.c

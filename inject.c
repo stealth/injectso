@@ -246,11 +246,11 @@ char *find_libc_start(pid_t pid)
 	for (;;) {
 		if (!fgets(buf, sizeof(buf), f))
 			break;
-		if (!strstr(buf, "r-xp"))
+		if (!strstr(buf, "r-xp") && !strstr(buf, "r--p"))
 			continue;
 		if (!(p = strstr(buf, "/")))
 			continue;
-		if (!strstr(p, "/lib64/libc-") && !strstr(p, "/lib/libc-") && !strstr(p, "/lib/x86_64-linux-gnu/libc-") &&
+		if (!strstr(p, "/lib64/libc-") && !strstr(p, "/lib/libc-") && !strstr(p, "/lib/x86_64-linux-gnu/libc-") && !strstr(p, "/usr/lib64/libc.so") &&
 		    !strstr(p, "/lib/libc.so"))	/* Android */
 			continue;
 		start = strtok(buf, "-");
@@ -679,7 +679,7 @@ void fill_offsets_nm(struct process_hook *ph)
 {
 	FILE *pfd = NULL;
 	char buf[128], *space = NULL, *daemon_libc = NULL, *my_libc = NULL;
-	size_t dlopen_offset = 0;
+	int32_t dlopen_offset = 0;
 	int prelinked = 0;
 
 	assert(ph);
@@ -728,7 +728,7 @@ void fill_offsets_nm(struct process_hook *ph)
 				memset(buf, 0, sizeof(buf));
 				if (!fgets(buf, sizeof(buf), pfd))
 					break;
-				if (strstr(buf, " T "))
+				if (strstr(buf, " T ") || strstr(buf, " t "))
 					break;
 			}
 			if ((space = strchr(buf, ' ')) != NULL)
@@ -752,6 +752,7 @@ void fill_offsets_nm(struct process_hook *ph)
 	if (prelinked > 0)
 		dlopen_offset -= (size_t)my_libc;
 
+	printf("[+] Foreign libc start: %p, offset=%d\n", daemon_libc, dlopen_offset);
 	ph->dlopen_address = daemon_libc + dlopen_offset;
 }
 

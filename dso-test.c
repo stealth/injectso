@@ -3,7 +3,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-void _init()
+void __attribute__((constructor)) doit()
 {
 	//fprintf(stderr, "Yo from init()\n");
 
