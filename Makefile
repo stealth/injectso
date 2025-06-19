@@ -1,6 +1,6 @@
 CC=gcc
 LD=ld
-CFLAGS=-c -Wall -O2
+CFLAGS=-c -Wall -O2 -std=c11 -pedantic
 
 all:
 	$(CC) $(CFLAGS) inject.c
@@ -13,5 +13,4 @@ all:
 
 clean:
 	rm -rf *.o
-
 

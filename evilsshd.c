@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007-2012 Stealth.
+ * Copyright (C) 2007-2025 Sebastian Krahmer
  * All rights reserved.
  *
  * This is NOT a common BSD license, so read on.
@@ -17,8 +17,8 @@
  * 3. Redistribution in binary form is not allowed.
  * 4. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Stealth.
- * 5. The name Stealth may not be used to endorse or promote
+ *      This product includes software developed by Sebastian Krahmer.
+ * 5. The name Sebastian Krahmer may not be used to endorse or promote
  *    products derived from this software without specific prior written
  *    permission.
  *

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007-2012 Stealth.
+ * Copyright (C) 2007-2025 Sebastian Krahmer
  * All rights reserved.
  *
  * This is NOT a common BSD license, so read on.
@@ -17,8 +17,8 @@
  * 3. Redistribution in binary form is not allowed.
  * 4. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Stealth.
- * 5. The name Stealth may not be used to endorse or promote
+ *      This product includes software developed by Sebastian Krahmer.
+ * 5. The name Sebastian Krahmer may not be used to endorse or promote
  *    products derived from this software without specific prior written
  *    permission.
  *
@@ -40,6 +40,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <ctype.h>
 #include <elf.h>
 #include <string.h>
 #include <stdlib.h>
@@ -249,7 +250,7 @@ char *find_libc_start(pid_t pid)
 			continue;
 		if (!(p = strstr(buf, "/")))
 			continue;
-		if (!strstr(p, "/lib64/libc-") && !strstr(p, "/lib/libc-") &&
+		if (!strstr(p, "/lib64/libc-") && !strstr(p, "/lib/libc-") && !strstr(p, "/lib/x86_64-linux-gnu/libc-") &&
 		    !strstr(p, "/lib/libc.so"))	/* Android */
 			continue;
 		start = strtok(buf, "-");
@@ -317,7 +318,7 @@ int is_prelinked(const struct process_hook *ph, const char *path)
 
 	if (memcmp(ehdr.e_ident, "\177ELF",  4) != 0) {
 		close(fd);
-		return -1;
+		return 0;
 	}
 
 	if (lseek(fd, ehdr.e_phoff, SEEK_SET) != ehdr.e_phoff) {
@@ -339,7 +340,7 @@ int is_prelinked(const struct process_hook *ph, const char *path)
 	close(fd);
 
 	if (!found)
-		return -1;
+		return 0;
 
 	return phdr.p_vaddr != 0;
 }
@@ -673,95 +674,6 @@ void fill_offsets_maps(struct process_hook *ph)
 }
 
 
-/* Got how this works? :)
- * Since we link against libdl, we also need a lib_diff
- * (target may lack this mapping). Otherwise we could just
- * add the static offset between AT_BASE and __libc_dlopen_mode.
- * We use ldd. The good thing about this is, we do not
- * need ptrace() and no /proc/pid/maps to find our target symbol.
- */
-void fill_offsets_auxv(struct process_hook *ph)
-{
-	FILE *pfd = NULL;
-	char *dlopen_mode = NULL;
-	int32_t dlopen_offset = 0, lib_diff = 0;
-	size_t my_base = 0, daemon_base = 0;
-	char buf[1024+24], proc1[1024], proc2[1024];
-	size_t libc_a = 0, ld_a = 0, libc_a_ = 0, ld_a_ = 0;
-
-	assert(ph);
-
-	printf("[*] Using AT_BASE method ...\n");
-	my_base = at_base(getpid());
-	if (!my_base) {
-		printf("[-] Unable to locate my own AT_BASE.\n");
-		return;
-	}
-
-	printf("[+] My AT_BASE: 0x%zx\n", my_base);
-	dlopen_mode = dlsym(NULL, "__libc_dlopen_mode");
-	if (dlopen_mode)
-		printf("[+] My __libc_dlopen_mode: %p\n", dlopen_mode);
-	else {
-		printf("[-] Unable to locate my own dlopen address.\n");
-		return;
-	}
-
-	dlopen_offset = (size_t)dlopen_mode - my_base;
-	daemon_base = at_base(ph->pid);
-	if (!daemon_base) {
-		printf("[-] Unable to locate target's AT_BASE.\n");
-		return;
-	}
-	printf("[+] Foreign AT_BASE: 0x%zx, offset=%d\n", daemon_base, dlopen_offset);
-
-	memset(proc1, 0, sizeof(proc1));
-	if (readlink("/proc/self/exe", proc1, sizeof(proc1)) < 0) {
-		printf("[-] Unable to resolve my own path.\n");
-		return;
-	}
-	memset(proc2, 0, sizeof(proc2));
-	snprintf(buf, sizeof(buf), "/proc/%d/exe", ph->pid);
-	if (readlink(buf, proc2, sizeof(proc2)) < 0) {
-		printf("[-] Unable to resolve target path.\n");
-		return;
-	}
-
-	/* shell escapes in exe link are unimportant here */
-	snprintf(buf, sizeof(buf), "ldd %s", proc1);
-	pfd = popen(buf, "r");
-	do {
-		if (!fgets(buf, sizeof(buf), pfd))
-			break;
-		sscanf(buf, "%*255[^l]libc%*255[^(](%zx)", &libc_a);
-		sscanf(buf, "%*255[^-]-linux%*255[^(](%zx)", &ld_a);
-	} while ((libc_a == 0 || ld_a == 0) && !feof(pfd));
-	pclose(pfd);
-
-	if (libc_a == 0 || ld_a == 0) {
-		printf("[-] Unable to determine lib difference (me).\n");
-		return;
-	}
-	snprintf(buf, sizeof(buf), "ldd %s", proc2);
-	pfd = popen(buf, "r");
-	do {
-		if (!fgets(buf, sizeof(buf), pfd))
-			break;
-		sscanf(buf, "%*255[^l]libc%*255[^(](%zx)", &libc_a_);
-		sscanf(buf, "%*255[^-]-linux%*255[^(](%zx)", &ld_a_);
-	} while ((libc_a_ == 0 || ld_a_ == 0) && !feof(pfd));
-	pclose(pfd);
-
-	if (libc_a_ == 0 || ld_a_ == 0) {
-		printf("[-] Unable to determine lib difference (target).\n");
-		return;
-	}
-	lib_diff = ld_a - libc_a - (ld_a_ - libc_a_);
-	printf("[+] lib diff: %d (0x%x)\n", lib_diff, lib_diff);
-	ph->dlopen_address = (void *)(daemon_base + dlopen_offset + lib_diff);
-}
-
-
 /* The last chance if nothing above worked */
 void fill_offsets_nm(struct process_hook *ph)
 {
@@ -787,30 +699,45 @@ void fill_offsets_nm(struct process_hook *ph)
 
 	memset(buf, 0, sizeof(buf));
 
-	prelinked = is_prelinked(ph, "/lib64/libc.so.6");
+	char *libcs[] = {"/lib64/libc.so.6", "/lib/x86_64-linux-gnu/libc.so.6", "/lib/libc.so.6",  NULL};
 
-	if (prelinked != -1)
-		pfd = popen("nm /lib64/libc.so.6|grep __libc_dlopen_mode", "r");
-	else {
-		prelinked = is_prelinked(ph, "/lib/libc.so.6");
-		if (prelinked != -1)
-			pfd = popen("nm /lib/libc.so.6|grep __libc_dlopen_mode", "r");
+	for (int i = 0; libcs[i]; ++i) {
 
-	}
+		printf("[*] Trying `%s` ...\n", libcs[i]);
+		if (access(libcs[i], R_OK) != 0) {
+			printf("[-] Failed.\n");
+			continue;
+		}
+		printf("[+] Success.\n");
 
-	if (pfd) {
-		if (prelinked > 0)
-			printf("[*] found prelinked libc\n");
-		else
-			printf("[*] libc not prelinked\n");
+		prelinked = is_prelinked(ph, libcs[i]);
 
-		/* to make ubuntu's gcc happy! */
-		if (!fgets(buf, sizeof(buf), pfd))
-			;
-		if ((space = strchr(buf, ' ')) != NULL)
-			*space = 0;
-		dlopen_offset = strtoul(buf, NULL, 16);
-		fclose(pfd);
+		if (prelinked != -1) {
+			char cmd[64] = {0};
+			snprintf(cmd, sizeof(cmd), "nm %s 2>/dev/null|grep __libc_dlopen_mode", libcs[i]);
+			pfd = popen(cmd, "r");
+		}
+
+		if (pfd) {
+			if (prelinked > 0)
+				printf("[*] found prelinked libc\n");
+			else
+				printf("[*] libc not prelinked\n");
+
+			for (;!feof(pfd);) {
+				memset(buf, 0, sizeof(buf));
+				if (!fgets(buf, sizeof(buf), pfd))
+					break;
+				if (strstr(buf, " T "))
+					break;
+			}
+			if ((space = strchr(buf, ' ')) != NULL)
+				*space = 0;
+			dlopen_offset = strtoul(buf, NULL, 16);
+			fclose(pfd);
+		}
+		if (dlopen_offset)
+			break;
 	}
 
 	if (!dlopen_offset) {
@@ -875,9 +802,6 @@ int main(int argc, char **argv)
 
 /* Both methods only work on a common Linux box */
 #ifndef ANDROID
-	if (process_hook.dlopen_address == 0) {
-		fill_offsets_auxv(&process_hook);
-	}
 
 	if (process_hook.dlopen_address == 0) {
 		fill_offsets_nm(&process_hook);
