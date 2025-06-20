@@ -4,7 +4,7 @@
  *
  * This is NOT a common BSD license, so read on.
  *
- * Redistribution in source and use in binary forms, with or without
+ * Redistribution in source (but not in binary forms), with or without
  * modification, are permitted provided that the following conditions
  * are met:
  *

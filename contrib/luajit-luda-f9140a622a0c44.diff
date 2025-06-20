@@ -1,0 +1,609 @@
+diff --git a/src/Makefile b/src/Makefile
+index c83abfa0..6c4594cc 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -501,7 +501,7 @@ LJVM_O= lj_vm.o
+ LJVM_BOUT= $(LJVM_S)
+ LJVM_MODE= elfasm
+ 
+-LJLIB_O= lib_base.o lib_math.o lib_bit.o lib_string.o lib_table.o \
++LJLIB_O= lib_base.o lib_math.o lib_bit.o lib_string.o lib_table.o lib_luda.o\
+ 	 lib_io.o lib_os.o lib_package.o lib_debug.o lib_jit.o lib_ffi.o \
+ 	 lib_buffer.o
+ LJLIB_C= $(LJLIB_O:.o=.c)
+diff --git a/src/Makefile.dep b/src/Makefile.dep
+index e10a6b29..5ab488d1 100644
+--- a/src/Makefile.dep
++++ b/src/Makefile.dep
+@@ -37,6 +37,9 @@ lib_math.o: lib_math.c lua.h luaconf.h lauxlib.h lualib.h lj_obj.h \
+ lib_os.o: lib_os.c lua.h luaconf.h lauxlib.h lualib.h lj_obj.h lj_def.h \
+  lj_arch.h lj_gc.h lj_err.h lj_errmsg.h lj_buf.h lj_str.h lj_lib.h \
+  lj_libdef.h
++lib_luda.o: lib_luda.c lua.h luaconf.h lauxlib.h lualib.h lj_obj.h lj_def.h \
++ lj_arch.h lj_gc.h lj_err.h lj_errmsg.h lj_buf.h lj_str.h lj_lib.h \
++ lj_libdef.h
+ lib_package.o: lib_package.c lua.h luaconf.h lauxlib.h lualib.h lj_obj.h \
+  lj_def.h lj_arch.h lj_err.h lj_errmsg.h lj_lib.h
+ lib_string.o: lib_string.c lua.h luaconf.h lauxlib.h lualib.h lj_obj.h \
+diff --git a/src/lib_init.c b/src/lib_init.c
+index 01cecf2f..84dbdf5e 100644
+--- a/src/lib_init.c
++++ b/src/lib_init.c
+@@ -26,6 +26,7 @@ static const luaL_Reg lj_lib_load[] = {
+   { LUA_DBLIBNAME,	luaopen_debug },
+   { LUA_BITLIBNAME,	luaopen_bit },
+   { LUA_JITLIBNAME,	luaopen_jit },
++  { LUA_LUDALIBNAME,	luaopen_luda },
+   { NULL,		NULL }
+ };
+ 
+diff --git a/src/lib_luda.c b/src/lib_luda.c
+new file mode 100644
+index 00000000..8bcb0acc
+--- /dev/null
++++ b/src/lib_luda.c
+@@ -0,0 +1,544 @@
++/*
++ * Copyright (C) 2007-2025 Sebastian Krahmer
++ * All rights reserved.
++ *
++ * This is NOT a common BSD license, so read on.
++ *
++ * Redistribution in source (but not in binary forms), with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ * 1. The provided software is FOR EDUCATIONAL PURPOSES ONLY! You must not
++ *    use this software or parts of it to commit crime or any illegal
++ *    activities. Local law may forbid usage or redistribution of this
++ *    software in your country.
++ * 2. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 3. Redistribution in binary form is not allowed.
++ * 4. All advertising materials mentioning features or use of this software
++ *    must display the following acknowledgement:
++ *      This product includes software developed by Sebastian Krahmer.
++ * 5. The name Sebastian Krahmer may not be used to endorse or promote
++ *    products derived from this software without specific prior written
++ *    permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY
++ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++#include <stdint.h>
++#include <string.h>
++#include <stdlib.h>
++#include <stdio.h>
++#include <signal.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <sys/mman.h>
++#include <sys/ucontext.h>
++
++#define lib_luda_c
++#define LUA_LIB
++
++#include "lua.h"
++#include "lauxlib.h"
++#include "lualib.h"
++
++#include "lj_obj.h"
++#include "lj_gc.h"
++#include "lj_err.h"
++#include "lj_buf.h"
++#include "lj_str.h"
++#include "lj_lib.h"
++
++#if LJ_TARGET_POSIX
++#include <unistd.h>
++#else
++#include <stdio.h>
++#endif
++
++#if !LJ_TARGET_PSVITA
++#include <locale.h>
++#endif
++
++
++#define LJLIB_MODULE_luda
++
++uint32_t luda_testval = 0x7350;
++uint64_t luda_testval_ptr = (uint64_t)&luda_testval;
++
++int luda_testfunc(int i, char *str)
++{
++	printf("H: called luda_testfunc(0x%x, \"%s\")\n", i, str);
++	printf("H: luda_testfunc self addr=%p\n", luda_testfunc);
++	return i;
++}
++
++uint64_t luda_testfunc_ptr = (uint64_t)luda_testfunc;
++
++// u32 = peek32("0xaddr")
++LJLIB_CF(luda_peek32)
++{
++	const char *hex = luaL_optstring(L, 1, NULL);
++
++	uint32_t v = 0;
++	if (hex) {
++		uint64_t u64 = strtoull(hex, NULL, 16);
++		void *addr = (void *)u64;
++		memcpy(&v, addr, sizeof(v));
++	}
++
++	lua_pushinteger(L, v);
++	return 1;
++}
++
++// u16 = peek16("0xaddr")
++LJLIB_CF(luda_peek16)
++{
++	const char *hex = luaL_optstring(L, 1, NULL);
++
++	uint16_t v = 0;
++	if (hex) {
++		uint64_t u64 = strtoull(hex, NULL, 16);
++		void *addr = (void *)u64;
++		memcpy(&v, addr, sizeof(v));
++	}
++
++	lua_pushinteger(L, v);
++	return 1;
++}
++
++
++// u8 = peek8("0xaddr")
++LJLIB_CF(luda_peek8)
++{
++	const char *hex = luaL_optstring(L, 1, NULL);
++
++	uint8_t v = 0;
++	if (hex) {
++		uint64_t u64 = strtoull(hex, NULL, 16);
++		void *addr = (void *)u64;
++		memcpy(&v, addr, sizeof(v));
++	}
++
++	lua_pushinteger(L, v);
++	return 1;
++}
++
++
++// str = peek_string("0xaddr")
++LJLIB_CF(luda_peek_string)
++{
++	const char *hex = luaL_optstring(L, 1, NULL);
++
++	if (hex) {
++		uint64_t u64 = strtoull(hex, NULL, 16);
++		char *addr = (void *)u64;
++		lua_pushstring(L, addr);
++	} else
++		lua_pushstring(L, "");
++
++	return 1;
++}
++
++
++// lstr = peek_lstring("0xaddr", size)
++LJLIB_CF(luda_peek_lstring)
++{
++	const char *hex = luaL_optstring(L, 1, NULL);
++	uint32_t l = lua_tointeger(L, 2) & 0xffffffff;
++
++	if (hex) {
++		uint64_t u64 = strtoull(hex, NULL, 16);
++		char *addr = (void *)u64;
++		lua_pushlstring(L, addr, l);
++	} else
++		lua_pushlstring(L, "", 0);
++
++	return 1;
++}
++
++
++// poke32("0xaddr", u32)
++LJLIB_CF(luda_poke32)
++{
++	const char *hex = luaL_optstring(L, 1, NULL);
++	uint32_t v = lua_tointeger(L, 2) & 0xffffffff;
++	if (hex) {
++		uint64_t u64 = strtoull(hex, NULL, 16);
++		void *addr = (void *)u64;
++		memcpy(addr, &v, sizeof(v));
++	}
++
++	return 0;
++}
++
++// poke16("0xaddr", u16)
++LJLIB_CF(luda_poke16)
++{
++	const char *hex = luaL_optstring(L, 1, NULL);
++	uint16_t v = lua_tointeger(L, 2) & 0xffff;
++	if (hex) {
++		uint64_t u64 = strtoull(hex, NULL, 16);
++		void *addr = (void *)u64;
++		memcpy(addr, &v, sizeof(v));
++	}
++
++	return 0;
++}
++
++
++// poke8("0xaddr", u8)
++LJLIB_CF(luda_poke8)
++{
++	const char *hex = luaL_optstring(L, 1, NULL);
++	uint8_t v = lua_tointeger(L, 2) & 0xff;
++	if (hex) {
++		uint64_t u64 = strtoull(hex, NULL, 16);
++		void *addr = (void *)u64;
++		memcpy(addr, &v, sizeof(v));
++	}
++
++	return 0;
++}
++
++// x86_64 mcontext_t
++enum {
++	reg_r8	= 0,
++	reg_r9,
++	reg_r10,
++	reg_r11,
++	reg_r12,
++	reg_r13,
++	reg_r14,
++	reg_r15,
++	reg_rdi,
++	reg_rsi,
++	reg_rbp,
++	reg_rbx,
++	reg_rdx,
++	reg_rax,
++	reg_rcx,
++	reg_rsp,
++	reg_rip,
++	reg_efl,
++	reg_csgsfs,
++	reg_err,
++	reg_trapno,
++	reg_oldmask,
++	reg_cr2,
++	break_opc = 0xcc
++};
++
++
++enum {
++	page_size	= 0x1000,
++	max_hooks	= 64,
++};
++
++
++static struct {
++	uint64_t addr;
++	char *name;
++	uint8_t opc, opc_size;
++	lua_State *L;
++} hooks[max_hooks] = {{0, 0}};
++
++
++static struct {
++	const char *opc;
++	uint8_t opc_size;
++} opc_entries[] = {
++	{"\x55", 1},			// push $rbp
++	{"\xf3\x0f\x1e\xfa", 4},	// endbr64
++	{"\x41\x54", 2}			// push $r12
++};
++
++
++
++// hook("0xaddr", "my_hook")
++LJLIB_CF(luda_hook)
++{
++	const char *hex = luaL_optstring(L, 1, NULL);
++	const char *name = luaL_optstring(L, 2, NULL);
++
++	if (hex && name) {
++
++		// find free slot
++		int i = 0;
++		for (; i < max_hooks; ++i) {
++			if (hooks[i].addr == 0)
++				break;
++		}
++		if (i == max_hooks)
++			return 0;
++
++		uint64_t u64 = strtoull(hex, NULL, 16);
++		char *addr = (char *)u64;
++
++		hooks[i].addr = u64;
++		hooks[i].name = strdup(name);
++		hooks[i].L = L;
++		hooks[i].opc = *addr;
++		hooks[i].opc_size = 1;		// default
++
++		// check which opcode was replaced and record its len
++		for (int j = 0; j < sizeof(opc_entries)/sizeof(opc_entries[0]); ++j) {
++			if (memcmp(opc_entries[j].opc, addr, opc_entries[j].opc_size) == 0) {
++				hooks[i].opc_size = opc_entries[j].opc_size;
++				break;
++			}
++		}
++
++		*addr = (uint8_t)break_opc;
++	}
++
++	return 0;
++}
++
++// unhook("0xaddr")
++LJLIB_CF(luda_unhook)
++{
++	const char *hex = luaL_optstring(L, 1, NULL);
++
++	if (hex) {
++		uint64_t u64 = strtoull(hex, NULL, 16);
++
++		// find reg slot
++		int i = 0;
++		for (; i < max_hooks; ++i) {
++			if (hooks[i].addr == u64)
++				break;
++		}
++		if (i == max_hooks)
++			return 0;
++
++		char *addr = (char *)u64;
++		*addr = hooks[i].opc;
++		hooks[i].opc = 0;
++		hooks[i].opc_size = 0;
++		hooks[i].addr = 0;
++		free(hooks[i].name);
++		hooks[i].L = NULL;
++	}
++
++	return 0;
++}
++
++
++static void fill_register_table(lua_State *L, mcontext_t *mctxt)
++{
++	lua_createtable(L, 23, 23);
++	char value[32] = {0};
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_r8]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_r8");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_r9]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_r9");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_r10]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_r10");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_r11]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_r11");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_r12]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_r12");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_r13]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_r13");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_r14]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_r14");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_r15]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_r15");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_rdi]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_rdi");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_rsi]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_rsi");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_rbp]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_rbp");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_rbx]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_rbx");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_rdx]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_rdx");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_rax]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_rax");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_rcx]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_rcx");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_rsp]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_rsp");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_rip]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_rip");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_efl]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_efl");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_csgsfs]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_csgsfs");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_err]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_err");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_trapno]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_trapno");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_oldmask]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_oldmask");
++
++	snprintf(value, sizeof(value), "0x%zx", (size_t)mctxt->gregs[reg_cr2]);
++	lua_pushstring(L, value);
++	lua_setfield(L, -2, "reg_cr2");
++}
++
++
++static void trp_handler(int sig, siginfo_t *info, void *u)
++{
++	ucontext_t *uctxt = (ucontext_t *)u;
++	mcontext_t *mctxt = (mcontext_t *)&(uctxt->uc_mcontext);
++
++	// Where did it trap?
++	char *pc = (char *)mctxt->gregs[reg_rip];
++	--pc;
++
++	// let sigreturn() continue as if nothing happened
++	mctxt->gregs[reg_rip] = (uint64_t)pc;
++
++	// Two cases:
++	// a) We are trapped when entering the function, as intended. In this case remove breakpoint and add another
++	//    at RIP + opc_size so we will trap right again after continuing and enter case b)
++	// b) We are trapped at hooking_point + opc_size, which means we have just successfully called the hook and continued, but
++	//    now need to re-establish the (just-removed) breakpoint in order for the next time the hooked function is called.
++
++	int i = 0;
++	enum { TRAP_CASE_A = 0, TRAP_CASE_B = 1 } trap_case;
++
++	for (; i < max_hooks; ++i) {
++		if (hooks[i].addr == (uint64_t)pc) {
++			trap_case = TRAP_CASE_A;
++			break;
++		} else if (hooks[i].addr + hooks[i].opc_size == (uint64_t)pc) {
++			trap_case = TRAP_CASE_B;
++			break;
++		}
++	}
++	if (i == max_hooks)
++		return;
++
++	//printf("luda trap @%p for %s\n", addr, hooks[i].name);
++
++	if (trap_case == TRAP_CASE_A) {
++
++		pc[0] = hooks[i].opc;
++		hooks[i].opc = pc[hooks[i].opc_size];
++		pc[hooks[i].opc_size] = (uint8_t)break_opc;
++
++		int top_idx = lua_gettop(hooks[i].L);
++
++		lua_getglobal(hooks[i].L, hooks[i].name);
++		if (lua_isfunction(hooks[i].L, -1)) {
++			fill_register_table(hooks[i].L, mctxt);
++			lua_pcall(hooks[i].L, 1, 1, 0);
++		}
++
++		lua_settop(hooks[i].L, top_idx);
++
++	} else {
++		pc[0] = hooks[i].opc;
++		hooks[i].opc = pc[0 - hooks[i].opc_size];		// opc_size stays the same
++		pc[0 - hooks[i].opc_size] = (uint8_t)break_opc;
++	}
++}
++
++
++static int luda_setup()
++{
++	struct sigaction sa = {0};
++	sa.sa_sigaction = trp_handler;
++	sa.sa_flags = SA_SIGINFO;
++
++	sigaction(SIGTRAP, &sa, NULL);
++
++	char line[512] = {0};
++	uint64_t b = 0, e = 0;
++	FILE *f = fopen("/proc/self/maps", "r");
++	for (;!feof(f);) {
++		memset(line, 0, sizeof(line));
++		fgets(line, sizeof(line) - 1, f);
++		if (sscanf(line, "%zx-%zx ", &b, &e) == 2) {
++			//printf("%zx %zx\n", b, e);
++			mprotect((void *)b, e - b, PROT_READ|PROT_WRITE|PROT_EXEC);
++		}
++	}
++	fclose(f);
++
++	return 0;
++}
++
++
++void __attribute__((constructor)) luda_init()
++{
++	// if this envvar is set, act as testing via "luajit" binary direct invocation
++	if (getenv("LUAJIT_MAIN"))
++		return;
++
++	lua_State *_L = luaL_newstate();
++	if (!_L)
++		return;
++	luaL_openlibs(_L);
++	if (luaL_dofile(_L, "/tmp/luda.lua"))
++		;
++	lua_pop(_L, lua_gettop(_L));
++}
++
++
++#include "lj_libdef.h"
++
++LUALIB_API int luaopen_luda(lua_State *L)
++{
++	LJ_LIB_REG(L, LUA_LUDALIBNAME, luda);
++	luda_setup();
++	return 1;
++}
++
+diff --git a/src/lualib.h b/src/lualib.h
+index 2f91427f..824dddb0 100644
+--- a/src/lualib.h
++++ b/src/lualib.h
+@@ -21,6 +21,7 @@
+ #define LUA_BITLIBNAME	"bit"
+ #define LUA_JITLIBNAME	"jit"
+ #define LUA_FFILIBNAME	"ffi"
++#define LUA_LUDALIBNAME "luda"
+ 
+ LUALIB_API int luaopen_base(lua_State *L);
+ LUALIB_API int luaopen_math(lua_State *L);
+@@ -28,6 +29,7 @@ LUALIB_API int luaopen_string(lua_State *L);
+ LUALIB_API int luaopen_table(lua_State *L);
+ LUALIB_API int luaopen_io(lua_State *L);
+ LUALIB_API int luaopen_os(lua_State *L);
++LUALIB_API int luaopen_luda(lua_State *L);
+ LUALIB_API int luaopen_package(lua_State *L);
+ LUALIB_API int luaopen_debug(lua_State *L);
+ LUALIB_API int luaopen_bit(lua_State *L);
