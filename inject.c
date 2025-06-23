@@ -399,15 +399,21 @@ int inject_code(const struct process_hook *ph)
 	if (ptrace(PTRACE_GETREGS, ph->pid, NULL, &regs) < 0)
 		die("[-] ptrace GETREGS");
 
+	memcpy(&saved_regs, &regs, sizeof(regs));
+
 	peek_text(ph->pid, regs.rsp + 1024, sbuf1, sizeof(sbuf1));
 	peek_text(ph->pid, regs.rsp, sbuf2, sizeof(sbuf2));
+
+	// Newer GCCs submit movdqa and alike instructions, which require 16byte alignment
+	// in the next depth call-stack (adding +8 somewhere). Basically a NOP otherwise.
+	regs.rsp |= 0xf;
+	regs.rsp &= ~7;
 
 	/* fake saved return address, triggering a SIGSEGV to catch */
 	v = 0;
 	poke_text(ph->pid, regs.rsp, (char *)&v, sizeof(v));
 	poke_text(ph->pid, regs.rsp + 1024, ph->dso, strlen(ph->dso) + 1);
 
-	memcpy(&saved_regs, &regs, sizeof(regs));
 	printf("[+] rdi=0x%lx rsp=0x%lx rip=0x%lx\n", regs.rdi, regs.rsp, regs.rip);
 
 	/* arguments to function we call */
@@ -438,7 +444,7 @@ int inject_code(const struct process_hook *ph)
 	if (ptrace(PTRACE_DETACH, ph->pid, NULL, NULL) < 0)
 		die("[-] ptrace DETACH");
 	if (aregs.rip != 0)
-		printf("[-] dlopen in target may have failed (no clean NULL fault)\n");
+		printf("[-] dlopen in target may have failed (no clean NULL fault, try different RSP alignment?)\n");
 
 	return 0;
 }

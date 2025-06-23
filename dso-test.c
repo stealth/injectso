@@ -5,7 +5,7 @@
 
 void __attribute__((constructor)) doit()
 {
-	//fprintf(stderr, "Yo from init()\n");
+	fprintf(stderr, "Yo from init()\n");
 
 #ifdef ANDROID
 	close(open("/data/local/tmp/injectso.works", O_RDWR|O_CREAT, 0600));
