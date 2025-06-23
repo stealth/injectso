@@ -250,7 +250,9 @@ char *find_libc_start(pid_t pid)
 			continue;
 		if (!(p = strstr(buf, "/")))
 			continue;
-		if (!strstr(p, "/lib64/libc-") && !strstr(p, "/lib/libc-") && !strstr(p, "/lib/x86_64-linux-gnu/libc-") && !strstr(p, "/usr/lib64/libc.so") &&
+		if (!strstr(p, "/lib64/libc-") && !strstr(p, "/lib/libc-") &&
+		    !strstr(p, "/lib/x86_64-linux-gnu/libc-") && !strstr(p, "/usr/lib64/libc.so") &&
+		    !strstr(p, "/lib/x86_64-linux-gnu/libc.so") &&	// Ubuntu
 		    !strstr(p, "/lib/libc.so"))	/* Android */
 			continue;
 		start = strtok(buf, "-");
@@ -586,7 +588,7 @@ int inject_code(const struct process_hook *ph)
 	/* fake saved return address, triggering a SIGSEGV to catch */
 	v = 0x0;
 	poke_text(ph->pid, regs.esp, (char *)&v, sizeof(v));
-	poke_text(ph->pid, regs.esp + 1024, ph->dso, strlen(ph->dso) + 1); 
+	poke_text(ph->pid, regs.esp + 1024, ph->dso, strlen(ph->dso) + 1);
 
 	memcpy(&saved_regs, &regs, sizeof(regs));
 
