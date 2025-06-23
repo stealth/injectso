@@ -39,10 +39,10 @@ index 01cecf2f..84dbdf5e 100644
  
 diff --git a/src/lib_luda.c b/src/lib_luda.c
 new file mode 100644
-index 00000000..8bcb0acc
+index 00000000..a7765e42
 --- /dev/null
 +++ b/src/lib_luda.c
-@@ -0,0 +1,544 @@
+@@ -0,0 +1,550 @@
 +/*
 + * Copyright (C) 2007-2025 Sebastian Krahmer
 + * All rights reserved.
@@ -300,11 +300,14 @@ index 00000000..8bcb0acc
 +
 +static struct {
 +	const char *opc;
-+	uint8_t opc_size;
++	uint8_t opc_cmp;			// how much to compare
++	uint8_t opc_size;			// actual INSN size
 +} opc_entries[] = {
-+	{"\x55", 1},			// push $rbp
-+	{"\xf3\x0f\x1e\xfa", 4},	// endbr64
-+	{"\x41\x54", 2}			// push $r12
++	{"\x55", 1, 1},				// push $rbp
++	{"\x53", 1, 1},				// push $rbx
++	{"\x83\x3d", 2, 7},			// cmpl... Centos7
++	{"\xf3\x0f\x1e\xfa", 4, 4},		// endbr64
++	{"\x41\x54", 2, 2}			// push $r12
 +};
 +
 +
@@ -336,8 +339,9 @@ index 00000000..8bcb0acc
 +		hooks[i].opc_size = 1;		// default
 +
 +		// check which opcode was replaced and record its len
-+		for (int j = 0; j < sizeof(opc_entries)/sizeof(opc_entries[0]); ++j) {
-+			if (memcmp(opc_entries[j].opc, addr, opc_entries[j].opc_size) == 0) {
++		int j = 0;
++		for (j = 0; j < sizeof(opc_entries)/sizeof(opc_entries[0]); ++j) {
++			if (memcmp(opc_entries[j].opc, addr, opc_entries[j].opc_cmp) == 0) {
 +				hooks[i].opc_size = opc_entries[j].opc_size;
 +				break;
 +			}
@@ -539,7 +543,9 @@ index 00000000..8bcb0acc
 +
 +static int luda_setup()
 +{
-+	struct sigaction sa = {0};
++	struct sigaction sa;
++
++	memset(&sa, 0, sizeof(sa));
 +	sa.sa_sigaction = trp_handler;
 +	sa.sa_flags = SA_SIGINFO;
 +

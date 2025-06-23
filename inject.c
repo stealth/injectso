@@ -642,7 +642,7 @@ int inject_code(const struct process_hook *ph)
 
 void usage(const char *path)
 {
-	printf("Usage: %s <-p pid> <-P dso-path> [-s pid]\n", path);
+	printf("Usage: %s <-p pid> <-P dso-path> [-s pid] [-S dlopen-symbol]\n", path);
 	exit(1);
 }
 
@@ -708,7 +708,7 @@ void fill_offsets_nm(struct process_hook *ph)
 
 	memset(buf, 0, sizeof(buf));
 
-	char *libcs[] = {"/lib64/libc.so.6", "/lib/x86_64-linux-gnu/libc.so.6", "/lib/libc.so.6",  NULL};
+	char *libcs[] = {"/lib64/libc.so.6", "/lib/x86_64-linux-gnu/libc.so.6", "/lib/libc.so.6",  "/usr/lib/libc.so.6", NULL};
 
 	for (int i = 0; libcs[i]; ++i) {
 
@@ -723,7 +723,7 @@ void fill_offsets_nm(struct process_hook *ph)
 
 		if (prelinked != -1) {
 			char cmd[64] = {0};
-			snprintf(cmd, sizeof(cmd), "nm %s 2>/dev/null|grep __libc_dlopen_mode", libcs[i]);
+			snprintf(cmd, sizeof(cmd), "nm %s 2>/dev/null|grep %s", libcs[i], ph->symbol);
 			pfd = popen(cmd, "r");
 		}
 
@@ -769,9 +769,10 @@ void fill_offsets_nm(struct process_hook *ph)
 int main(int argc, char **argv)
 {
 	int c;
-	char pbuf[PATH_MAX];
+	char pbuf[PATH_MAX] = {0};
+	char *symbol = NULL;
 
-	while ((c = getopt(argc, argv, "s:p:P:")) != -1) {
+	while ((c = getopt(argc, argv, "s:p:P:S:")) != -1) {
 		switch (c) {
 		case 'P':
 #ifdef ANDROID
@@ -786,6 +787,9 @@ int main(int argc, char **argv)
 		case 's':
 			show_auxv(optarg);
 			exit(0);
+		case 'S':
+			symbol = strdup(optarg);
+			break;
 		default:
 			usage(argv[0]);
 		}
@@ -795,7 +799,11 @@ int main(int argc, char **argv)
 	process_hook.symbol = "dlopen";
 #else
 	setbuffer(stdout, NULL, 0);
-	process_hook.symbol = "__libc_dlopen_mode";
+
+	if (symbol)
+		process_hook.symbol = symbol;
+	else
+		process_hook.symbol = "__libc_dlopen_mode";
 #endif
 
 	printf("injectso v0.53 -- DSO process hotpatching tool\n\n");
@@ -819,7 +827,7 @@ int main(int argc, char **argv)
 #endif
 
 	if (process_hook.dlopen_address == 0) {
-		printf("[-] Unable to locate foreign dlopen address.\n");
+		printf("[-] Unable to locate foreign dlopen address. Try adding `-S dlopen` ?\n");
 		return 1;
 	}
 
