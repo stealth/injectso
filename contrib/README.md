@@ -3,7 +3,7 @@ luda (luajit like frida)
 
 <p align="center">
 <a href="https://github.com/c-skills/welcome">
-<img src="https://github.com/c-skills/welcome/blob/master/logo-black.jpg"/>
+<img src="https://github.com/stealth/injectso/blob/master/contrib/luda.jpg"/>
 </a>
 </p>
 
