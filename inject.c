@@ -252,6 +252,7 @@ char *find_libc_start(pid_t pid)
 			continue;
 		if (!strstr(p, "/lib64/libc-") && !strstr(p, "/lib/libc-") &&
 		    !strstr(p, "/lib/x86_64-linux-gnu/libc-") && !strstr(p, "/usr/lib64/libc.so") &&
+		    !strstr(p, "/usr/lib/libc.so") &&			// Manjaro
 		    !strstr(p, "/lib/x86_64-linux-gnu/libc.so") &&	// Ubuntu
 		    !strstr(p, "/lib/libc.so"))	/* Android */
 			continue;
